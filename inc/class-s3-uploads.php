@@ -76,7 +76,11 @@ class S3_Uploads {
   }
 
   public function filter_upload_dir($dirs) {
-
+		
+	if(isset($_GET["action"]) && !empty($_GET["action"])){//Ignore when it's a plugin upload
+      return $dirs;
+    }
+	
     $this->original_upload_dir = $dirs;
     
     //UPLOADS relative dir is specified and is not necessary below WP_CONTENT_DIR
