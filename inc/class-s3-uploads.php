@@ -78,25 +78,28 @@ class S3_Uploads {
   public function filter_upload_dir($dirs) {
 
     $this->original_upload_dir = $dirs;
-
-    //We normalize paths (this should work on windows and linux)
-    $dirs['path'] = str_replace(realpath(ABSPATH . UPLOADS), 's3://' . $this->bucket . "/" . S3_UPLOADS_PREFIX, realpath($dirs['path']));
-    $dirs['basedir'] = str_replace(realpath(ABSPATH . UPLOADS), 's3://' . $this->bucket . "/" . S3_UPLOADS_PREFIX, realpath($dirs['basedir']));
-
+    
+    //UPLOADS relative dir is specified and is not necessary below WP_CONTENT_DIR
+    if (defined('UPLOADS') && !empty(UPLOADS)) {
+      //We normalize paths (this should work on windows and linux)
+      $dirs['path'] = str_replace(wp_normalize_path(ABSPATH . '/' . UPLOADS), 's3://' . $this->bucket . "/" . S3_UPLOADS_PREFIX, wp_normalize_path($dirs['path']));
+      $dirs['basedir'] = str_replace(wp_normalize_path(ABSPATH . '/' . UPLOADS), 's3://' . $this->bucket . "/" . S3_UPLOADS_PREFIX, wp_normalize_path($dirs['basedir']));
+    } else {
+      //We asume a default installation
+      $dirs['path'] = str_replace(wp_normalize_path(WP_CONTENT_DIR . '/' . "uploads"), 's3://' . $this->bucket . "/" . S3_UPLOADS_PREFIX, wp_normalize_path($dirs['path']));
+      $dirs['basedir'] = str_replace(wp_normalize_path(WP_CONTENT_DIR . '/' . "uploads"), 's3://' . $this->bucket . "/" . S3_UPLOADS_PREFIX, wp_normalize_path($dirs['basedir']));
+    }
 
     if (!defined('S3_UPLOADS_DISABLE_REPLACE_UPLOAD_URL') || !S3_UPLOADS_DISABLE_REPLACE_UPLOAD_URL) {
       if (defined('S3_UPLOADS_USE_LOCAL') && S3_UPLOADS_USE_LOCAL) {
         //Another normalization so s3 doesn't complain on Windows
-        $dirs['url'] = wp_normalize_path(str_replace('s3://' . $this->bucket, $dirs['baseurl'] . '/s3/' . $this->bucket, $dirs['path']));
-        $dirs['baseurl'] = wp_normalize_path(str_replace('s3://' . $this->bucket, $dirs['baseurl'] . '/s3/' . $this->bucket, $dirs['basedir']));
+        $dirs['url'] = (str_replace('s3://' . $this->bucket, $dirs['baseurl'] . '/s3/' . $this->bucket, $dirs['path']));
+        $dirs['baseurl'] = (str_replace('s3://' . $this->bucket, $dirs['baseurl'] . '/s3/' . $this->bucket, $dirs['basedir']));
       } else {
-        $dirs['url'] = wp_normalize_path(str_replace('s3://' . $this->bucket, $this->get_s3_url(), $dirs['path']));
-        $dirs['baseurl'] = wp_normalize_path(str_replace('s3://' . $this->bucket, $this->get_s3_url(), $dirs['basedir']));
+        $dirs['url'] = (str_replace('s3://' . $this->bucket, $this->get_s3_url(), $dirs['path']));
+        $dirs['baseurl'] = (str_replace('s3://' . $this->bucket, $this->get_s3_url(), $dirs['basedir']));
       }
     }
-    print_r($dirs);
-    die;
-
     return $dirs;
   }
 
