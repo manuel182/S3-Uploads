@@ -80,8 +80,8 @@ class S3_Uploads {
     $this->original_upload_dir = $dirs;
 
     //We normalize paths (this should work on windows and linux)
-    $dirs['path'] = str_replace(realpath(ABSPATH . UPLOADS), 's3://' . $this->bucket . "/" . S3_UPLOADS_PREFIX, realpath($dirs['path']));
-    $dirs['basedir'] = str_replace(realpath(ABSPATH . UPLOADS), 's3://' . $this->bucket . "/" . S3_UPLOADS_PREFIX, realpath($dirs['basedir']));
+    $dirs['path'] = str_replace(realpath(UPLOADS ? (ABSPATH . '/' . UPLOADS) : (WP_CONTENT_DIR . '/' . "uploads")), 's3://' . $this->bucket . "/" . S3_UPLOADS_PREFIX, realpath($dirs['path']));
+    $dirs['basedir'] = str_replace(realpath(UPLOADS ? (ABSPATH . '/' . UPLOADS) : (WP_CONTENT_DIR . '/' . "uploads")), 's3://' . $this->bucket . "/" . S3_UPLOADS_PREFIX, realpath($dirs['basedir']));
 
 
     if (!defined('S3_UPLOADS_DISABLE_REPLACE_UPLOAD_URL') || !S3_UPLOADS_DISABLE_REPLACE_UPLOAD_URL) {
