@@ -2,250 +2,249 @@
 
 class S3_Uploads {
 
-	private static $instance;
-	private        $bucket;
-	private        $bucket_url;
-	private        $key;
-	private        $secret;
+  private static $instance;
+  private $bucket;
+  private $bucket_url;
+  private $key;
+  private $secret;
+  public $original_upload_dir;
 
-	public $original_upload_dir;
+  /**
+   *
+   * @return S3_Uploads
+   */
+  public static function get_instance() {
 
-	/**
-	 *
-	 * @return S3_Uploads
-	 */
-	public static function get_instance() {
+    if (!self::$instance) {
+      self::$instance = new S3_Uploads(
+              S3_UPLOADS_BUCKET, defined('S3_UPLOADS_KEY') ? S3_UPLOADS_KEY : null, defined('S3_UPLOADS_SECRET') ? S3_UPLOADS_SECRET : null, defined('S3_UPLOADS_BUCKET_URL') ? S3_UPLOADS_BUCKET_URL : null, S3_UPLOADS_REGION
+      );
+    }
 
-		if ( ! self::$instance ) {
-			self::$instance = new S3_Uploads(
-				S3_UPLOADS_BUCKET,
-				defined( 'S3_UPLOADS_KEY' ) ? S3_UPLOADS_KEY : null,
-				defined( 'S3_UPLOADS_SECRET' ) ? S3_UPLOADS_SECRET : null,
-				defined( 'S3_UPLOADS_BUCKET_URL' ) ? S3_UPLOADS_BUCKET_URL : null,
-				S3_UPLOADS_REGION
-			);
-		}
+    return self::$instance;
+  }
 
-		return self::$instance;
-	}
+  public function __construct($bucket, $key, $secret, $bucket_url = null, $region = null) {
 
-	public function __construct( $bucket, $key, $secret, $bucket_url = null, $region = null ) {
+    $this->bucket = $bucket;
+    $this->key = $key;
+    $this->secret = $secret;
+    $this->bucket_url = $bucket_url;
+    $this->region = $region;
+  }
 
-		$this->bucket     = $bucket;
-		$this->key        = $key;
-		$this->secret     = $secret;
-		$this->bucket_url = $bucket_url;
-		$this->region     = $region;
-	}
+  /**
+   * Setup the hooks, urls filtering etc for S3 Uploads
+   */
+  public function setup() {
+    $this->register_stream_wrapper();
 
-	/**
-	 * Setup the hooks, urls filtering etc for S3 Uploads
-	 */
-	public function setup() {
-		$this->register_stream_wrapper();
+    add_filter('upload_dir', array($this, 'filter_upload_dir'));
+    add_filter('wp_image_editors', array($this, 'filter_editors'), 9);
+    add_filter('wp_delete_file', array($this, 'wp_filter_delete_file'));
+    add_filter('wp_read_image_metadata', array($this, 'wp_filter_read_image_metadata'), 10, 2);
+    remove_filter('admin_notices', 'wpthumb_errors');
 
-		add_filter( 'upload_dir', array( $this, 'filter_upload_dir' ) );
-		add_filter( 'wp_image_editors', array( $this, 'filter_editors' ), 9 );
-		add_filter( 'wp_delete_file', array( $this, 'wp_filter_delete_file' ) );
-		add_filter( 'wp_read_image_metadata', array( $this, 'wp_filter_read_image_metadata' ), 10, 2 );
-		remove_filter( 'admin_notices', 'wpthumb_errors' );
+    add_action('wp_handle_sideload_prefilter', array($this, 'filter_sideload_move_temp_file_to_s3'));
+  }
 
-		add_action( 'wp_handle_sideload_prefilter', array( $this, 'filter_sideload_move_temp_file_to_s3' ) );
-	}
+  /**
+   * Tear down the hooks, url filtering etc for S3 Uploads
+   */
+  public function tear_down() {
 
-	/**
-	 * Tear down the hooks, url filtering etc for S3 Uploads
-	 */
-	public function tear_down() {
+    stream_wrapper_unregister('s3');
+    remove_filter('upload_dir', array($this, 'filter_upload_dir'));
+    remove_filter('wp_image_editors', array($this, 'filter_editors'), 9);
+    remove_filter('wp_handle_sideload_prefilter', array($this, 'filter_sideload_move_temp_file_to_s3'));
+    remove_filter('wp_delete_file', array($this, 'wp_filter_delete_file'));
+  }
 
-		stream_wrapper_unregister( 's3' );
-		remove_filter( 'upload_dir', array( $this, 'filter_upload_dir' ) );
-		remove_filter( 'wp_image_editors', array( $this, 'filter_editors' ), 9 );
-		remove_filter( 'wp_handle_sideload_prefilter', array( $this, 'filter_sideload_move_temp_file_to_s3' ) );
-		remove_filter( 'wp_delete_file', array( $this, 'wp_filter_delete_file' ) );
-	}
+  /**
+   * Register the stream wrapper for s3
+   */
+  public function register_stream_wrapper() {
+    if (defined('S3_UPLOADS_USE_LOCAL') && S3_UPLOADS_USE_LOCAL) {
+      stream_wrapper_register('s3', 'S3_Uploads_Local_Stream_Wrapper', STREAM_IS_URL);
+    } else {
+      S3_Uploads_Stream_Wrapper::register($this->s3());
+      $objectAcl = defined('S3_UPLOADS_OBJECT_ACL') ? S3_UPLOADS_OBJECT_ACL : 'public-read';
+      stream_context_set_option(stream_context_get_default(), 's3', 'ACL', $objectAcl);
+    }
 
-	/**
-	 * Register the stream wrapper for s3
-	 */
-	public function register_stream_wrapper() {
-		if ( defined( 'S3_UPLOADS_USE_LOCAL' ) && S3_UPLOADS_USE_LOCAL ) {
-			stream_wrapper_register( 's3', 'S3_Uploads_Local_Stream_Wrapper', STREAM_IS_URL );
-		} else {
-			S3_Uploads_Stream_Wrapper::register( $this->s3() );
-			$objectAcl = defined( 'S3_UPLOADS_OBJECT_ACL' ) ? S3_UPLOADS_OBJECT_ACL : 'public-read';
-			stream_context_set_option( stream_context_get_default(), 's3', 'ACL', $objectAcl );
-		}
+    stream_context_set_option(stream_context_get_default(), 's3', 'seekable', true);
+  }
 
-		stream_context_set_option( stream_context_get_default(), 's3', 'seekable', true );
-	}
+  public function filter_upload_dir($dirs) {
 
-	public function filter_upload_dir( $dirs ) {
+    $this->original_upload_dir = $dirs;
 
-		$this->original_upload_dir = $dirs;
+    //We normalize paths (this should work on windows and linux)
+    $dirs['path'] = str_replace(realpath(ABSPATH . UPLOADS), 's3://' . $this->bucket . "/" . S3_UPLOADS_PREFIX, realpath($dirs['path']));
+    $dirs['basedir'] = str_replace(realpath(ABSPATH . UPLOADS), 's3://' . $this->bucket . "/" . S3_UPLOADS_PREFIX, realpath($dirs['basedir']));
 
-		$dirs['path']    = str_replace( WP_CONTENT_DIR, 's3://' . $this->bucket, $dirs['path'] );
-		$dirs['basedir'] = str_replace( WP_CONTENT_DIR, 's3://' . $this->bucket, $dirs['basedir'] );
 
-		if ( ! defined( 'S3_UPLOADS_DISABLE_REPLACE_UPLOAD_URL' ) || ! S3_UPLOADS_DISABLE_REPLACE_UPLOAD_URL ) {
+    if (!defined('S3_UPLOADS_DISABLE_REPLACE_UPLOAD_URL') || !S3_UPLOADS_DISABLE_REPLACE_UPLOAD_URL) {
+      if (defined('S3_UPLOADS_USE_LOCAL') && S3_UPLOADS_USE_LOCAL) {
+        //Another normalization so s3 doesn't complain on Windows
+        $dirs['url'] = wp_normalize_path(str_replace('s3://' . $this->bucket, $dirs['baseurl'] . '/s3/' . $this->bucket, $dirs['path']));
+        $dirs['baseurl'] = wp_normalize_path(str_replace('s3://' . $this->bucket, $dirs['baseurl'] . '/s3/' . $this->bucket, $dirs['basedir']));
+      } else {
+        $dirs['url'] = wp_normalize_path(str_replace('s3://' . $this->bucket, $this->get_s3_url(), $dirs['path']));
+        $dirs['baseurl'] = wp_normalize_path(str_replace('s3://' . $this->bucket, $this->get_s3_url(), $dirs['basedir']));
+      }
+    }
+    print_r($dirs);
+    die;
 
-			if ( defined( 'S3_UPLOADS_USE_LOCAL' ) && S3_UPLOADS_USE_LOCAL ) {
-				$dirs['url']     = str_replace( 's3://' . $this->bucket, $dirs['baseurl'] . '/s3/' . $this->bucket, $dirs['path'] );
-				$dirs['baseurl'] = str_replace( 's3://' . $this->bucket, $dirs['baseurl'] . '/s3/' . $this->bucket, $dirs['basedir'] );
+    return $dirs;
+  }
 
-			} else {
-				$dirs['url']     = str_replace( 's3://' . $this->bucket, $this->get_s3_url(), $dirs['path'] );
-				$dirs['baseurl'] = str_replace( 's3://' . $this->bucket, $this->get_s3_url(), $dirs['basedir'] );
-			}
-		}
+  /**
+   * When WordPress removes files, it's expecting to do so on
+   * absolute file paths, as such it breaks when using uris for
+   * file paths (such as s3://...). We have to filter the file_path
+   * to only return the relative section, to play nice with WordPress
+   * handling.
+   *
+   * @param  string $file_path
+   * @return string
+   */
+  public function wp_filter_delete_file($file_path) {
+    $dir = wp_upload_dir();
 
-		return $dirs;
-	}
+    return str_replace(trailingslashit($dir['basedir']), '', $file_path);
+  }
 
-	/**
-	 * When WordPress removes files, it's expecting to do so on
-	 * absolute file paths, as such it breaks when using uris for
-	 * file paths (such as s3://...). We have to filter the file_path
-	 * to only return the relative section, to play nice with WordPress
-	 * handling.
-	 *
-	 * @param  string $file_path
-	 * @return string
-	 */
-	public function wp_filter_delete_file( $file_path ) {
-		$dir = wp_upload_dir();
+  public function get_s3_url() {
+    if ($this->bucket_url) {
+      return $this->bucket_url;
+    }
 
-		return str_replace( trailingslashit( $dir['basedir'] ), '', $file_path );
-	}
+    $bucket = strtok($this->bucket, '/');
+    $path = substr($this->bucket, strlen($bucket));
 
-	public function get_s3_url() {
-		if ( $this->bucket_url ) {
-			return $this->bucket_url;
-		}
+    return apply_filters('s3_uploads_bucket_url', 'https://' . $bucket . '.s3.amazonaws.com' . $path);
+  }
 
-		$bucket = strtok( $this->bucket, '/' );
-		$path   = substr( $this->bucket, strlen( $bucket ) );
+  /**
+   * Get the S3 bucket name
+   *
+   * @return string
+   */
+  public function get_s3_bucket() {
+    return $bucket = strtok($this->bucket, '/');
+  }
 
-		return apply_filters( 's3_uploads_bucket_url', 'https://' . $bucket . '.s3.amazonaws.com' . $path );
-	}
+  public function get_s3_bucket_region() {
+    return $this->region;
+  }
 
-	/**
-	 * Get the S3 bucket name
-	 *
-	 * @return string
-	 */
-	public function get_s3_bucket() {
-		return $bucket = strtok( $this->bucket, '/' );
-	}
+  public function get_original_upload_dir() {
 
-	public function get_s3_bucket_region() {
-		return $this->region;
-	}
+    if (empty($this->original_upload_dir)) {
+      wp_upload_dir();
+    }
 
-	public function get_original_upload_dir() {
+    return $this->original_upload_dir;
+  }
 
-		if ( empty( $this->original_upload_dir ) ) {
-			wp_upload_dir();
-		}
+  /**
+   * @return Aws\S3\S3Client
+   */
+  public function s3() {
 
-		return $this->original_upload_dir;
-	}
+    if (!empty($this->s3)) {
+      return $this->s3;
+    }
 
-	/**
-	 * @return Aws\S3\S3Client
-	 */
-	public function s3() {
+    $params = array('version' => 'latest');
 
-		if ( ! empty( $this->s3 ) ) {
-			return $this->s3;
-		}
+    if ($this->key && $this->secret) {
+      $params['credentials']['key'] = $this->key;
+      $params['credentials']['secret'] = $this->secret;
+    }
 
-		$params = array( 'version' => 'latest' );
+    if ($this->region) {
+      $params['signature'] = 'v4';
+      $params['region'] = $this->region;
+    }
 
-		if ( $this->key && $this->secret ) {
-			$params['credentials']['key']    = $this->key;
-			$params['credentials']['secret'] = $this->secret;
-		}
+    if (defined('WP_PROXY_HOST') && defined('WP_PROXY_PORT')) {
+      $proxy_auth = '';
+      $proxy_address = WP_PROXY_HOST . ':' . WP_PROXY_PORT;
 
-		if ( $this->region ) {
-			$params['signature'] = 'v4';
-			$params['region']    = $this->region;
-		}
+      if (defined('WP_PROXY_USERNAME') && defined('WP_PROXY_PASSWORD')) {
+        $proxy_auth = WP_PROXY_USERNAME . ':' . WP_PROXY_PASSWORD . '@';
+      }
 
-		if ( defined( 'WP_PROXY_HOST' ) && defined( 'WP_PROXY_PORT' ) ) {
-			$proxy_auth    = '';
-			$proxy_address = WP_PROXY_HOST . ':' . WP_PROXY_PORT;
+      $params['request.options']['proxy'] = $proxy_auth . $proxy_address;
+    }
 
-			if ( defined( 'WP_PROXY_USERNAME' ) && defined( 'WP_PROXY_PASSWORD' ) ) {
-				$proxy_auth = WP_PROXY_USERNAME . ':' . WP_PROXY_PASSWORD . '@';
-			}
+    $params = apply_filters('s3_uploads_s3_client_params', $params);
+    $this->s3 = Aws\S3\S3Client::factory($params);
 
-			$params['request.options']['proxy'] = $proxy_auth . $proxy_address;
-		}
+    return $this->s3;
+  }
 
-		$params   = apply_filters( 's3_uploads_s3_client_params', $params );
-		$this->s3 = Aws\S3\S3Client::factory( $params );
+  public function filter_editors($editors) {
 
-		return $this->s3;
-	}
+    if (( $position = array_search('WP_Image_Editor_Imagick', $editors) ) !== false) {
+      unset($editors[$position]);
+    }
 
-	public function filter_editors( $editors ) {
+    array_unshift($editors, 'S3_Uploads_Image_Editor_Imagick');
 
-		if ( ( $position = array_search( 'WP_Image_Editor_Imagick', $editors ) ) !== false ) {
-			unset( $editors[ $position ] );
-		}
+    return $editors;
+  }
 
-		array_unshift( $editors, 'S3_Uploads_Image_Editor_Imagick' );
+  /**
+   * Copy the file from /tmp to an s3 dir so handle_sideload doesn't fail due to
+   * trying to do a rename() on the file cross streams. This is somewhat of a hack
+   * to work around the core issue https://core.trac.wordpress.org/ticket/29257
+   *
+   * @param array File array
+   * @return array
+   */
+  public function filter_sideload_move_temp_file_to_s3(array $file) {
+    $upload_dir = wp_upload_dir();
+    $new_path = $upload_dir['basedir'] . '/tmp/' . basename($file['tmp_name']);
 
-		return $editors;
-	}
+    copy($file['tmp_name'], $new_path);
+    unlink($file['tmp_name']);
+    $file['tmp_name'] = $new_path;
 
-	/**
-	 * Copy the file from /tmp to an s3 dir so handle_sideload doesn't fail due to
-	 * trying to do a rename() on the file cross streams. This is somewhat of a hack
-	 * to work around the core issue https://core.trac.wordpress.org/ticket/29257
-	 *
-	 * @param array File array
-	 * @return array
-	 */
-	public function filter_sideload_move_temp_file_to_s3( array $file ) {
-		$upload_dir = wp_upload_dir();
-		$new_path   = $upload_dir['basedir'] . '/tmp/' . basename( $file['tmp_name'] );
+    return $file;
+  }
 
-		copy( $file['tmp_name'], $new_path );
-		unlink( $file['tmp_name'] );
-		$file['tmp_name'] = $new_path;
+  /**
+   * Filters wp_read_image_metadata. exif_read_data() doesn't work on
+   * file streams so we need to make a temporary local copy to extract
+   * exif data from.
+   *
+   * @param array  $meta
+   * @param string $file
+   * @return array|bool
+   */
+  public function wp_filter_read_image_metadata($meta, $file) {
+    remove_filter('wp_read_image_metadata', array($this, 'wp_filter_read_image_metadata'), 10);
+    $temp_file = $this->copy_image_from_s3($file);
+    $meta = wp_read_image_metadata($temp_file);
+    add_filter('wp_read_image_metadata', array($this, 'wp_filter_read_image_metadata'), 10, 2);
+    unlink($temp_file);
+    return $meta;
+  }
 
-		return $file;
-	}
+  /**
+   * Get a local copy of the file.
+   *
+   * @param  string $file
+   * @return string
+   */
+  public function copy_image_from_s3($file) {
+    $temp_filename = wp_tempnam($file);
+    copy($file, $temp_filename);
+    return $temp_filename;
+  }
 
-	/**
-	 * Filters wp_read_image_metadata. exif_read_data() doesn't work on
-	 * file streams so we need to make a temporary local copy to extract
-	 * exif data from.
-	 *
-	 * @param array  $meta
-	 * @param string $file
-	 * @return array|bool
-	 */
-	public function wp_filter_read_image_metadata( $meta, $file ) {
-		remove_filter( 'wp_read_image_metadata', array( $this, 'wp_filter_read_image_metadata' ), 10 );
-		$temp_file = $this->copy_image_from_s3( $file );
-		$meta      = wp_read_image_metadata( $temp_file );
-		add_filter( 'wp_read_image_metadata', array( $this, 'wp_filter_read_image_metadata' ), 10, 2 );
-		unlink( $temp_file );
-		return $meta;
-	}
-
-	/**
-	 * Get a local copy of the file.
-	 *
-	 * @param  string $file
-	 * @return string
-	 */
-	public function copy_image_from_s3( $file ) {
-		$temp_filename = wp_tempnam( $file );
-		copy( $file, $temp_filename );
-		return $temp_filename;
-	}
 }
